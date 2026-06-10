@@ -1,29 +1,43 @@
 import os
-import re
-import json
+import random
 import time
 import pandas as pd
-
+from typing import Optional
 from playwright.sync_api import (
     sync_playwright,
     TimeoutError as PlaywrightTimeoutError
 )
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from dotenv import load_dotenv
+
+load_dotenv()
+
+api_key = os.getenv("BROKERS_API_KEY")
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/137.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.2; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.7198.97 Safari/537.36 OPR/114.0.5103.75",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+]
 
 
 class PostcodeScraper:
+
     SEARCH_INPUT = "//input[@id='location-filter']"
     POSTCODE_OPTION = "//div[@id='fab-autocomplete-results']//button"
-    SEARCH_BUTTON = "//button[@type='submit' and contains(text(), 'Search')]"
+    SEARCH_BUTTON = "//button[@type='submit' and contains(text(),'Search')]"
+    BROKERS_CARD = "//section[@id='search_results']"
 
     def __init__(
-            self,
-            base_url,
-            broker_base_url,
-            csv_file,
-            output_csv,
-            headless=False
+        self,
+        base_url,
+        broker_base_url,
+        csv_file,
+        output_csv,
+        headless=False,
     ):
         self.base_url = base_url
         self.broker_base_url = broker_base_url
@@ -42,8 +56,8 @@ class PostcodeScraper:
         ]
 
         missing = [
-            col for col in required
-            if col not in df.columns
+            c for c in required
+            if c not in df.columns
         ]
 
         if missing:
@@ -51,37 +65,63 @@ class PostcodeScraper:
                 f"Missing columns: {missing}"
             )
 
-        return df.to_dict("records")
+        records = df.to_dict("records")
 
-    def wait_and_select_postcode(self, page, postcode):
-        """
-        Type postcode and wait for autocomplete results.
-        """
+        return records
 
-        search_box = page.locator(self.SEARCH_INPUT)
+    def create_context(self, browser):
 
-        search_box.wait_for(state="visible", timeout=15000)
+        ua = random.choice(USER_AGENTS)
+
+        print(f"\nUsing User Agent:\n{ua}\n")
+
+        return browser.new_context(
+            ignore_https_errors=True,
+            viewport={'width': 1920, 'height': 1080},
+            user_agent=ua
+        )
+
+    def wait_and_select_postcode(
+        self,
+        page,
+        postcode
+    ):
+
+        search_box = page.locator(
+            self.SEARCH_INPUT
+        )
+
+        search_box.wait_for(
+            state="visible",
+            timeout=15000
+        )
 
         search_box.click()
-        time.sleep(3)
+        time.sleep(2)
         search_box.fill("")
 
-        # More realistic typing
-        search_box.type(postcode, delay=100)
-        time.sleep(3)
+        search_box.type(
+            postcode,
+            delay=100
+        )
 
-        option = page.locator(self.POSTCODE_OPTION).first
+        option = page.locator(
+            self.POSTCODE_OPTION
+        ).first
 
         option.wait_for(
             state="visible",
-            timeout=20000
+            timeout=10000
         )
 
         option.click()
-        time.sleep(3)
+        time.sleep(2)
 
     def perform_search(self, page):
-        search_btn = page.locator(self.SEARCH_BUTTON)
+
+        search_btn = page.locator(
+            self.SEARCH_BUTTON
+        )
 
         search_btn.wait_for(
             state="visible",
@@ -89,93 +129,93 @@ class PostcodeScraper:
         )
 
         search_btn.click()
+        time.sleep(3)
+        cards_section = page.locator(self.BROKERS_CARD)
+        cards_section.wait_for(state="visible", timeout=20000)
 
-        # Wait for navigation/network
-        page.wait_for_load_state("domcontentloaded")
-        page.wait_for_load_state("networkidle")
-
-    def extract_js_data(self, page):
-        """
-        Attempts multiple extraction methods.
-        """
-
-        html = page.content()
-
-        patterns = [
-            r"const\s+hb_fab_map\s*=\s*(\{.*?\});",
-            r"let\s+hb_fab_map\s*=\s*(\{.*?\});",
-            r"var\s+hb_fab_map\s*=\s*(\{.*?\});",
-            r"hb_fab_map\s*=\s*(\{.*?\});",
-        ]
-
-        for pattern in patterns:
-            match = re.search(
-                pattern,
-                html,
-                re.DOTALL
-            )
-
-            if not match:
-                continue
-
-            try:
-                return json.loads(match.group(1))
-            except Exception as e:
-                print(f"JSON parse failed: {e}")
-
-        return None
-
-    def extract_via_browser_context(self, page):
-        """
-        Fallback:
-        Check if object exists in JS runtime.
-        """
+    def extract_via_browser_context(
+        self,
+        page
+    ) -> Optional[dict]:
 
         try:
-            data = page.evaluate("""
-            () => {
-                if (typeof hb_fab_map !== 'undefined')
-                    return hb_fab_map;
 
-                if (window.hb_fab_map)
-                    return window.hb_fab_map;
+            page.wait_for_function(
+                """
+                () => {
+                    if (
+                        typeof hb_fab_map === 'undefined'
+                    ) {
+                        return false;
+                    }
 
-                return null;
-            }
-            """)
+                    return (
+                        hb_fab_map.brokerLocations &&
+                        hb_fab_map.brokerLocations.length > 0
+                    );
+                }
+                """,
+                timeout=30000
+            )
 
-            return data
+            return page.evaluate(
+                """
+                () => {
+                    if (
+                        typeof hb_fab_map !== 'undefined'
+                    ) {
+                        return hb_fab_map;
+                    }
+
+                    if (window.hb_fab_map) {
+                        return window.hb_fab_map;
+                    }
+
+                    return null;
+                }
+                """
+            )
 
         except Exception as e:
-            print(f"Browser extraction failed: {e}")
+
+            print(
+                f"Browser extraction failed: {e}"
+            )
+
             return None
 
     def extract_brokers(
-            self,
-            data: dict,
-            suburb: str,
-            state: str,
-            postcode: str,
+        self,
+        data: dict,
+        suburb: str,
+        state: str,
+        postcode: str,
     ):
-        """
-        Extract all brokers from hb_fab_map.
-        """
 
         rows = []
 
-        broker_locations = data.get("brokerLocations", [])
+        broker_locations = data.get(
+            "brokerLocations",
+            []
+        )
 
         for broker in broker_locations:
 
-            card_html = broker.get("card", "")
-
-            if not card_html:
-                continue
-
             try:
-                soup = BeautifulSoup(card_html, "html.parser")
 
-                # Broker Name
+                card_html = broker.get(
+                    "card",
+                    ""
+                )
+
+                if not card_html:
+                    continue
+
+                soup = BeautifulSoup(
+                    card_html,
+                    "html.parser"
+                )
+
                 broker_name_el = soup.select_one(
                     "p.broker-name"
                 )
@@ -186,8 +226,6 @@ class PostcodeScraper:
                     else ""
                 )
 
-
-                # Broker URL
                 profile_link = soup.select_one(
                     "a.button"
                 )
@@ -195,7 +233,10 @@ class PostcodeScraper:
                 href = ""
 
                 if profile_link:
-                    href = profile_link.get("href", "")
+                    href = profile_link.get(
+                        "href",
+                        ""
+                    )
 
                 broker_url = urljoin(
                     self.broker_base_url,
@@ -213,12 +254,12 @@ class PostcodeScraper:
                 )
 
             except Exception as e:
+
                 print(
                     f"Broker parse failed: {e}"
                 )
 
         return rows
-
 
     def append_to_csv(self, rows):
 
@@ -239,11 +280,11 @@ class PostcodeScraper:
         )
 
     def process_postcode(
-            self,
-            page,
-            suburb,
-            state,
-            postcode
+        self,
+        page,
+        suburb,
+        state,
+        postcode
     ):
 
         page.goto(self.base_url)
@@ -259,7 +300,7 @@ class PostcodeScraper:
             page
         )
 
-        if not data:
+        if data is None:
             return []
 
         rows = self.extract_brokers(
@@ -270,29 +311,65 @@ class PostcodeScraper:
         )
 
         return rows
+
     def run(self):
 
         inputs = self.load_input_data()
-        inputs= inputs[:1]
+
+        total_brokers = 0
+
+        proxy_settings = {
+            "server": "http://proxy.scrapingbee.com:8886",
+            "username": api_key,
+            "password": "premium_proxy=true&country_code=au&render_js=false"
+        }
 
         with sync_playwright() as p:
 
             browser = p.chromium.launch(
-                headless=self.headless
+                headless=self.headless,
+                args=["--start-maximized","--disable-http2"],
+                proxy = proxy_settings,
+
             )
 
-            context = browser.new_context()
+
+            context = self.create_context(
+                browser
+            )
 
             page = context.new_page()
+            page.set_default_timeout(60000)
 
-            for row in inputs:
+            for idx, row in enumerate(
+                inputs,
+                start=1
+            ):
+
+                if idx % 50 == 0:
+                    time.sleep(random.randint(5,10))
+                    print(
+                        "\nRotating User Agent..."
+                    )
+
+                    page.close()
+                    context.close()
+
+                    context = self.create_context(
+                        browser
+                    )
+
+                    page = context.new_page()
+                    page.set_default_timeout(60000)
 
                 suburb = row["Suburb"]
                 state = row["State"]
-                postcode = str(row["PostCode"])
+                postcode = str(
+                    row["PostCode"]
+                )
 
                 try:
-
+                    time.sleep(random.randint(4,10))
                     broker_rows = (
                         self.process_postcode(
                             page,
@@ -306,31 +383,44 @@ class PostcodeScraper:
                         broker_rows
                     )
 
+                    total_brokers += len(
+                        broker_rows
+                    )
+
                     print(
                         f"{postcode}: "
                         f"{len(broker_rows)} brokers"
                     )
 
+                except PlaywrightTimeoutError:
+
+                    print(
+                        f"{postcode}: timeout"
+                    )
+
                 except Exception as e:
 
                     print(
-                        f"{postcode} failed: {e}"
+                        f"{postcode}: {e}"
                     )
 
+            context.close()
             browser.close()
+
+        return total_brokers
 
 if __name__ == "__main__":
     scraper = PostcodeScraper(
         base_url="https://findabroker.mfaa.com.au/find-accredited-broker/",
         broker_base_url="https://findabroker.mfaa.com.au/",
-        csv_file="extracted_suburbs_postcodes.csv",
+        csv_file="clean_postcodes.csv",
         output_csv="broker_primary_details.csv",
         headless=False
     )
 
-    results = scraper.run()
+    total_brokers = scraper.run()
 
     print(
-        f"\nCompleted. Total Results: "
-        f"{len(results)}"
+        f"\nCompleted. "
+        f"Total Brokers: {total_brokers}"
     )
