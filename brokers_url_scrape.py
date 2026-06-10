@@ -538,7 +538,7 @@ class PostcodeScraper:
 
             browser = p.chromium.launch(
                 headless=self.headless,
-                args=["--start-maximized","--disable-http2"],
+                args=["--start-maximized"],
                 proxy=proxy_settings
             )
 
