@@ -1,12 +1,12 @@
 import os
-import random
-import time
-import pandas as pd
 from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from scrapingbee import ScrapingBeeClient
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+import pandas as pd
 
+write_lock = Lock()
 load_dotenv()
 
 # Load API Key from .env
@@ -114,41 +114,49 @@ class BrokerScraper:
 
 
 def run_parallel_scraper(input_csv, output_csv, max_threads=5):
-    # Load the input data
     df = pd.read_csv(input_csv)
 
-    # Initialize our Scraper class
     scraper = BrokerScraper(api_key=API_KEY)
 
-    # Create the task list (index, url)
-    tasks = [(idx, row["Broker URL"]) for idx, row in df.iterrows()]
+    tasks = [
+        (idx, row["Broker URL"])
+        for idx, row in df.iterrows()
+    ]
 
-    # Dictionary to hold results temporarily
-    results_map = {}
+    print(
+        f"Starting ScrapingBee SDK Scraper "
+        f"with {max_threads} threads..."
+    )
 
-    print(f"Starting ScrapingBee SDK Scraper with {max_threads} threads...")
-
-    # Execute with ThreadPool
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        # map handles the execution and returns results
-        for index, data in executor.map(scraper.scrape_broker, tasks):
-            results_map[index] = data
 
-    # Merge data back into the main DataFrame using the stored Index
-    # This guarantees the rows stay in the same order as the input CSV
-    print("Ordering and merging results...")
-    for idx, data in results_map.items():
-        for column_name, value in data.items():
-            df.at[idx, column_name] = value
+        for index, data in executor.map(
+            scraper.scrape_broker,
+            tasks
+        ):
 
-    # Save to final CSV
-    df.to_csv(output_csv, index=False)
+            with write_lock:
+
+                # Update only the current row
+                for column_name, value in data.items():
+                    df.at[index, column_name] = value
+
+                # Save progress after every completed URL
+                df.to_csv(
+                    output_csv,
+                    index=False
+                )
+
+                print(
+                    f"Saved row {index + 1}/{len(df)}"
+                )
+
     print(f"Done! Saved to: {output_csv}")
 
 
 if __name__ == "__main__":
     run_parallel_scraper(
-        input_csv="broker_primary_details.csv",
+        input_csv="brokers_clean_deduplicated.csv",
         output_csv="broker_final_details.csv",
         max_threads=5  # Adjust this based on your ScrapingBee concurrency limit
     )
