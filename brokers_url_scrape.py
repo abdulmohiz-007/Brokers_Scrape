@@ -410,6 +410,7 @@ class PostcodeScraper:
         return total_brokers
 
 if __name__ == "__main__":
+    import time
     scraper = PostcodeScraper(
         base_url="https://findabroker.mfaa.com.au/find-accredited-broker/",
         broker_base_url="https://findabroker.mfaa.com.au/",
@@ -423,4 +424,28 @@ if __name__ == "__main__":
     print(
         f"\nCompleted. "
         f"Total Brokers: {total_brokers}"
+    )
+
+    time.sleep(10)
+
+    from csv_dedup import CSVDeduplicator
+    deduplicator = CSVDeduplicator(
+        input_csv="broker_primary_details.csv",
+        output_csv="brokers_clean_primary_details.csv",
+        url_column="Broker URL",
+    )
+
+    deduplicator.remove_duplicate_urls()
+
+    time.sleep(10)
+
+    import urllib3
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    from extract_brokers_details import run_parallel_scraper
+    run_parallel_scraper(
+        input_csv="brokers_clean_primary_details.csv",
+        output_csv="brokers_complete_details.csv",
+        max_threads=5
     )
