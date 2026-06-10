@@ -530,8 +530,8 @@ class PostcodeScraper:
             f"with {len(records)} postcodes"
         )
 
-        proxy_settings = {"server": "http://proxy.scrapingbee.com:8886", "username": api_key,
-                          "password": "premium_proxy=true&country_code=au&render_js=false"}
+        # proxy_settings = {"server": "https://proxy.scrapingbee.com:8886", "username": api_key,
+        #                   "password": "premium_proxy=true&country_code=au&render_js=false"}
 
 
         with sync_playwright() as p:
@@ -539,7 +539,7 @@ class PostcodeScraper:
             browser = p.chromium.launch(
                 headless=self.headless,
                 args=["--start-maximized"],
-                proxy=proxy_settings
+                # proxy=proxy_settings
             )
 
             context = self.create_context(
