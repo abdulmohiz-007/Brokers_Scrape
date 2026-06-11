@@ -158,5 +158,5 @@ if __name__ == "__main__":
     run_parallel_scraper(
         input_csv="brokers_clean_primary_details.csv",
         output_csv="broker_complete_details_v1.csv",
-        max_threads=15  # Adjust this based on your ScrapingBee concurrency limit
+        max_threads=8  # Adjust this based on your ScrapingBee concurrency limit
     )
