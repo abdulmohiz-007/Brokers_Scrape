@@ -114,19 +114,56 @@ class BrokerScraper:
 
 
 def run_parallel_scraper(input_csv, output_csv, max_threads=5):
-    df = pd.read_csv(input_csv)
+
+    # Resume mode if output already exists
+    if os.path.exists(output_csv):
+        print(f"Resuming from existing output file: {output_csv}")
+        df = pd.read_csv(output_csv, dtype=str).fillna("")
+    else:
+        print(f"Creating new output file from: {input_csv}")
+        df = pd.read_csv(input_csv, dtype=str).fillna("")
+
+        required_columns = [
+            "Company Name",
+            "Location",
+            "Phone",
+            "Email",
+            "Languages Spoken",
+            "Education",
+            "Specialties"
+        ]
+
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = ""
+
+        df.to_csv(output_csv, index=False)
 
     scraper = BrokerScraper(api_key=API_KEY)
 
-    tasks = [
-        (idx, row["Broker URL"])
-        for idx, row in df.iterrows()
-    ]
+    tasks = []
+
+    for idx, row in df.iterrows():
+
+        email = str(row.get("Email", "")).strip()
+        phone = str(row.get("Phone", "")).strip()
+
+        # Skip rows already completed
+        if email and phone:
+            continue
+
+        broker_url = str(row.get("Broker URL", "")).strip()
+
+        if broker_url:
+            tasks.append((idx, broker_url))
 
     print(
-        f"Starting ScrapingBee SDK Scraper "
-        f"with {max_threads} threads..."
+        f"Found {len(tasks)} incomplete brokers out of {len(df)} total rows."
     )
+
+    if not tasks:
+        print("Nothing left to scrape.")
+        return
 
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
 
@@ -137,11 +174,12 @@ def run_parallel_scraper(input_csv, output_csv, max_threads=5):
 
             with write_lock:
 
-                # Update only the current row
                 for column_name, value in data.items():
-                    df.at[index, column_name] = value
 
-                # Save progress after every completed URL
+                    # Only overwrite if we got a value
+                    if str(value).strip():
+                        df.at[index, column_name] = value
+
                 df.to_csv(
                     output_csv,
                     index=False
@@ -153,10 +191,9 @@ def run_parallel_scraper(input_csv, output_csv, max_threads=5):
 
     print(f"Done! Saved to: {output_csv}")
 
-
 if __name__ == "__main__":
     run_parallel_scraper(
-        input_csv="brokers_clean_deduplicated.csv",
-        output_csv="broker_final_details.csv",
+        input_csv="Total_Unique_Urls.csv",
+        output_csv="Total_unique_emails.csv",
         max_threads=5  # Adjust this based on your ScrapingBee concurrency limit
     )
