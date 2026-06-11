@@ -1,22 +1,35 @@
 import os
+import time
+import random
+import requests
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-from scrapingbee import ScrapingBeeClient
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 import pandas as pd
 
 write_lock = Lock()
-load_dotenv()
 
-# Load API Key from .env
-API_KEY = os.getenv("BROKERS_API_KEY")
 
 
 class BrokerScraper:
-    def __init__(self, api_key):
-        # Initialize the official ScrapingBee Client
-        self.client = ScrapingBeeClient(api_key=api_key)
+    def __init__(self):
+
+        self.session = requests.Session()
+
+        self.session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/137.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,"
+                "application/xml;q=0.9,image/avif,"
+                "image/webp,*/*;q=0.8"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "keep-alive",
+        })
 
     @staticmethod
     def clean_location(raw_text: str) -> str:
@@ -27,8 +40,12 @@ class BrokerScraper:
     def scrape_broker(self, url_info: tuple) -> tuple:
         """
         url_info is (index, url)
-        Returns (index, data_dict) to preserve order
+        Returns (index, data_dict)
         """
+
+        import time
+        import random
+
         index, url = url_info
 
         result = {
@@ -45,73 +62,185 @@ class BrokerScraper:
             return index, result
 
         try:
-            # Use the ScrapingBee Client to make the request
-            # This handles the proxy, rotation, and geolocation automatically
-            response = self.client.get(
-                url,
-                params={
-                    "country_code": "au",  # Browse from Australia
-                    "premium_proxy": "True",  # Use Residential IPs (highly recommended for MFAA)
-                    "render_js": "False",  # Fast and cheap (no JS needed for the profile page)
-                    "timeout": 30000  # 30 seconds timeout
-                }
+
+            response = None
+
+            for attempt in range(3):
+
+                try:
+
+                    # Stagger requests between threads
+                    time.sleep(random.uniform(0.5, 2.0))
+
+                    response = self.session.get(
+                        url,
+                        timeout=30
+                    )
+
+                    if response.status_code == 200:
+                        break
+
+                    print(
+                        f"Retry {attempt + 1} "
+                        f"[{index}] "
+                        f"Status={response.status_code}"
+                    )
+
+                except Exception as e:
+
+                    print(
+                        f"Retry {attempt + 1} "
+                        f"[{index}] "
+                        f"{e}"
+                    )
+
+                time.sleep((attempt + 1) * 2)
+
+            if not response or response.status_code != 200:
+                print(
+                    f"Failed [{index}]: "
+                    f"{url}"
+                )
+
+                return index, result
+
+            soup = BeautifulSoup(
+                response.text,
+                "html.parser"
             )
 
-            # Check if the request was successful
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.content, "html.parser")
+            # Validate page
+            broker_header = soup.select_one(
+                "div.broker-header"
+            )
 
-                # 1. Company vs Location logic
-                broker_details = soup.select_one("div.broker-header div.broker-details")
-                if broker_details:
-                    paragraphs = broker_details.find_all("p")
-                    for p in paragraphs:
-                        if p.find("i", class_="fa-location-dot"):
-                            location_text = p.get_text(separator="\n", strip=True)
-                            result["Location"] = self.clean_location(location_text)
-                        else:
-                            result["Company Name"] = p.get_text(strip=True)
+            if not broker_header:
+                print(
+                    f"Invalid page [{index}]: "
+                    f"{url}"
+                )
 
-                # 2. Phone (stored in data-phone attribute)
-                phone_element = soup.select_one("span#broker-phone-show")
-                if phone_element:
-                    result["Phone"] = phone_element.get("data-phone", "").strip()
+                return index, result
 
-                # 3. Email (stored in data-email attribute)
-                email_element = soup.select_one("span#broker-email-show")
-                if email_element:
-                    result["Email"] = email_element.get("data-email", "").strip()
+            # Company + Location
+            broker_details = soup.select_one(
+                "div.broker-header div.broker-details"
+            )
 
-                # 4. Languages
-                lang_element = soup.select_one("div.broker-languages")
-                if lang_element:
-                    lang_span_texts = [span.get_text(strip=True) for span in lang_element.find_all("span") if
-                                       span.get_text(strip=True)]
-                    result["Languages Spoken"] = ", ".join(lang_span_texts)
+            if broker_details:
 
-                # 5. Education
-                edu_element = soup.select_one("div.broker-education")
-                if edu_element:
-                    edu_span_texts = [span.get_text(strip=True) for span in edu_element.find_all("span") if
-                                      span.get_text(strip=True)]
-                    result["Education"] = ", ".join(edu_span_texts)
+                paragraphs = broker_details.find_all("p")
 
-                # 6. Specialties
-                spec_element = soup.select_one("div.broker-services")
-                if spec_element:
-                    span_texts = [span.get_text(strip=True) for span in spec_element.find_all("span") if
-                                  span.get_text(strip=True)]
-                    result["Specialties"] = ", ".join(span_texts)
+                for p in paragraphs:
 
-                print(f"Success [{index}]: {url}")
-            else:
-                print(f"Failed [{index}]: {url} -> Status Code: {response.status_code}")
+                    if p.find("i", class_="fa-location-dot"):
+
+                        location_text = p.get_text(
+                            separator="\n",
+                            strip=True
+                        )
+
+                        result["Location"] = self.clean_location(
+                            location_text
+                        )
+
+                    else:
+
+                        text = p.get_text(
+                            strip=True
+                        )
+
+                        if text:
+                            result["Company Name"] = text
+
+            # Phone
+            phone_element = soup.select_one(
+                "span#broker-phone-show"
+            )
+
+            if phone_element:
+                result["Phone"] = (
+                    phone_element.get(
+                        "data-phone",
+                        ""
+                    ).strip()
+                )
+
+            # Email
+            email_element = soup.select_one(
+                "span#broker-email-show"
+            )
+
+            if email_element:
+                result["Email"] = (
+                    email_element.get(
+                        "data-email",
+                        ""
+                    ).strip()
+                )
+
+            # Languages
+            lang_element = soup.select_one(
+                "div.broker-languages"
+            )
+
+            if lang_element:
+                lang_values = [
+                    span.get_text(strip=True)
+                    for span in lang_element.find_all("span")
+                    if span.get_text(strip=True)
+                ]
+
+                result["Languages Spoken"] = (
+                    ", ".join(lang_values)
+                )
+
+            # Education
+            edu_element = soup.select_one(
+                "div.broker-education"
+            )
+
+            if edu_element:
+                edu_values = [
+                    span.get_text(strip=True)
+                    for span in edu_element.find_all("span")
+                    if span.get_text(strip=True)
+                ]
+
+                result["Education"] = (
+                    ", ".join(edu_values)
+                )
+
+            # Specialties
+            spec_element = soup.select_one(
+                "div.broker-services"
+            )
+
+            if spec_element:
+                spec_values = [
+                    span.get_text(strip=True)
+                    for span in spec_element.find_all("span")
+                    if span.get_text(strip=True)
+                ]
+
+                result["Specialties"] = (
+                    ", ".join(spec_values)
+                )
+
+            print(
+                f"Success [{index}] "
+                f"Phone={bool(result['Phone'])} "
+                f"Email={bool(result['Email'])}"
+            )
 
         except Exception as e:
-            print(f"Error [{index}]: {url} -> {e}")
+
+            print(
+                f"Error [{index}] "
+                f"{url} -> {e}"
+            )
 
         return index, result
-
 
 def run_parallel_scraper(input_csv, output_csv, max_threads=5):
 
@@ -139,7 +268,7 @@ def run_parallel_scraper(input_csv, output_csv, max_threads=5):
 
         df.to_csv(output_csv, index=False)
 
-    scraper = BrokerScraper(api_key=API_KEY)
+    scraper = BrokerScraper()
 
     tasks = []
 
