@@ -1,4 +1,6 @@
 import os
+import time
+
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from scrapingbee import ScrapingBeeClient
@@ -47,13 +49,14 @@ class BrokerScraper:
         try:
             # Use the ScrapingBee Client to make the request
             # This handles the proxy, rotation, and geolocation automatically
+            time.sleep(2)
             response = self.client.get(
                 url,
                 params={
                     "country_code": "au",  # Browse from Australia
                     "premium_proxy": "True",  # Use Residential IPs (highly recommended for MFAA)
-                    "render_js": "False",  # Fast and cheap (no JS needed for the profile page)
-                    "timeout": 30000  # 30 seconds timeout
+                    "render_js": "True",  # Fast and cheap (no JS needed for the profile page)
+                    "timeout": 20000  # 30 seconds timeout
                 }
             )
 
@@ -156,7 +159,7 @@ def run_parallel_scraper(input_csv, output_csv, max_threads=5):
 
 if __name__ == "__main__":
     run_parallel_scraper(
-        input_csv="brokers_clean_deduplicated.csv",
-        output_csv="broker_final_details.csv",
+        input_csv="missing_emails_output.csv",
+        output_csv="broker_final_details_v2.csv",
         max_threads=5  # Adjust this based on your ScrapingBee concurrency limit
     )
